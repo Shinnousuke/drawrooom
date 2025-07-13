@@ -1,6 +1,8 @@
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
-import db  # Your backend file (make sure it has `join_room()` and `create_room_auto()`)
+import db  # Your SQLite backend for auth and room logic
+from firebase_sync import upload_canvas_data, get_canvas_data  # Firebase canvas sync
+import json
 
 # ---------------------- Page Config ---------------------- #
 st.set_page_config(page_title="DrawRoom", layout="wide")
@@ -82,8 +84,8 @@ def show_drawroom():
                 success, message = db.join_room(join_code, st.session_state.user_id)
                 if success:
                     st.session_state.room_code = join_code
-                    st.session_state.in_game = True  # 🚀 Enter canvas mode
-                    st.rerun()  # 🔁 Switch immediately
+                    st.session_state.in_game = True
+                    st.rerun()
                 else:
                     st.error(message)
             except Exception as e:
@@ -102,6 +104,11 @@ def show_game_canvas():
         unsafe_allow_html=True
     )
 
+    # 🔁 Fetch existing canvas from Firebase
+    canvas_json = get_canvas_data(st.session_state.room_code)
+    drawing_data = json.loads(canvas_json) if canvas_json else None
+
+    # 🖌️ Display canvas
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.3)",
         stroke_width=3,
@@ -110,8 +117,13 @@ def show_game_canvas():
         width=1280,
         height=700,
         drawing_mode="freedraw",
-        key="full_screen_canvas"
+        key="full_screen_canvas",
+        initial_drawing=drawing_data
     )
+
+    # 🔼 Upload updated canvas to Firebase
+    if canvas_result.json_data:
+        upload_canvas_data(st.session_state.room_code, json.dumps(canvas_result.json_data))
 
     if st.button("❌ Exit Game"):
         st.session_state.in_game = False
