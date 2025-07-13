@@ -1,3 +1,5 @@
 streamlit
 streamlit-drawable-canvas
 mysql-connector-python
+pyrebase4
+
