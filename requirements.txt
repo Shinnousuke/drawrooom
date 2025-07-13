@@ -3,4 +3,6 @@ streamlit-drawable-canvas
 mysql-connector-python
 pyrebase4
 streamlit-autorefresh
-
+setuptools
+gcloud
+pyrebase4
