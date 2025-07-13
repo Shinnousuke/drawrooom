@@ -1,27 +1,28 @@
 import streamlit as st
 from streamlit_drawable_canvas import st_canvas
 from streamlit_autorefresh import st_autorefresh
-import db
+import db  # Your SQLite backend
 from firebase_sync import upload_canvas_data, get_canvas_data
 import json
 
-# ------------------ Page Config ------------------ #
+# ---------------------- Page Config ---------------------- #
 st.set_page_config(page_title="DrawRoom", layout="wide")
 
-# ------------------ Initialize Session ------------------ #
+# ------------------ Initialize Session ------------------- #
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.username = ''
     st.session_state.user_id = 0
     st.session_state.room_code = ''
     st.session_state.in_game = False
-    st.session_state.last_canvas_data = None
+    st.session_state.last_synced_data = None
 
-# ------------------ Login Page ------------------ #
+# ---------------------- Login Page ----------------------- #
 def show_login():
     st.title("Login")
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
+
     if st.button("Log In"):
         success, result = db.login_user(email, password)
         if success:
@@ -34,12 +35,13 @@ def show_login():
         else:
             st.error(result)
 
-# ------------------ Register Page ------------------ #
+# --------------------- Register Page --------------------- #
 def show_register():
     st.title("Register")
     username = st.text_input("Username")
     email = st.text_input("Email")
     password = st.text_input("Password", type="password")
+
     if st.button("Register"):
         success, message = db.register_user(username, email, password)
         if success:
@@ -47,7 +49,7 @@ def show_register():
         else:
             st.error(message)
 
-# ------------------ DrawRoom Page ------------------ #
+# --------------------- DrawRoom Page --------------------- #
 def show_drawroom():
     if st.session_state.in_game:
         show_game_canvas()
@@ -61,53 +63,50 @@ def show_drawroom():
     with col1:
         st.markdown("### Create a New Room")
         if st.button("Create Room"):
-            try:
-                success, room_code = db.create_room_auto(st.session_state.user_id)
-                if success:
-                    st.session_state.room_code = room_code
-                    st.session_state.in_game = True
-                    st.session_state.last_canvas_data = None
-                    st.rerun()
-            except Exception as e:
-                st.error(f"Failed to create room: {e}")
+            success, room_code = db.create_room_auto(st.session_state.user_id)
+            if success:
+                st.session_state.room_code = room_code
+                st.session_state.in_game = True
+                st.rerun()
 
     with col2:
         join_code = st.text_input("Enter Room Code to Join")
         if st.button("Join Room"):
-            try:
-                success, message = db.join_room(join_code, st.session_state.user_id)
-                if success:
-                    st.session_state.room_code = join_code
-                    st.session_state.in_game = True
-                    st.session_state.last_canvas_data = None
-                    st.rerun()
-                else:
-                    st.error(message)
-            except Exception as e:
-                st.error(f"Failed to join room: {e}")
+            success, message = db.join_room(join_code, st.session_state.user_id)
+            if success:
+                st.session_state.room_code = join_code
+                st.session_state.in_game = True
+                st.rerun()
+            else:
+                st.error(message)
 
     if st.button("❌ Log Out"):
-        for key in ['logged_in', 'username', 'user_id', 'room_code', 'in_game', 'last_canvas_data']:
+        for key in ['logged_in', 'username', 'user_id', 'room_code', 'in_game', 'last_synced_data']:
             st.session_state[key] = False if key == 'logged_in' else ''
         st.rerun()
 
-# ------------------ Game Canvas ------------------ #
+# --------------------- Full-Screen Game Canvas --------------------- #
 def show_game_canvas():
     st.markdown(
         f"<h2 style='text-align: center;'>🎮 Room: {st.session_state.room_code} | Player: {st.session_state.username}</h2>",
         unsafe_allow_html=True
     )
 
-    # 🔁 Refresh every 2000 ms to sync updates
-    st_autorefresh(interval=2000, key="refresh")
+    # 🔁 Auto-refresh every 3 seconds
+    st_autorefresh(interval=3000, key="canvas_refresher")
 
-    # Get current canvas from Firebase
-    firebase_data = get_canvas_data(st.session_state.room_code)
-    remote_canvas = json.loads(firebase_data) if firebase_data else None
+    # ⬇️ Get current canvas from Firebase
+    canvas_json = get_canvas_data(st.session_state.room_code)
+    drawing_data = json.loads(canvas_json) if canvas_json else None
 
-    # Use last local data if available
-    drawing_data = st.session_state.last_canvas_data or remote_canvas
+    # 🧠 Prevent unnecessary flicker
+    if st.session_state.last_synced_data != canvas_json:
+        initial_drawing = drawing_data
+        st.session_state.last_synced_data = canvas_json
+    else:
+        initial_drawing = None
 
+    # 🖌️ Canvas
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0.3)",
         stroke_width=3,
@@ -116,23 +115,26 @@ def show_game_canvas():
         width=1280,
         height=700,
         drawing_mode="freedraw",
-        key="game_canvas",
-        initial_drawing=drawing_data,
+        key="full_screen_canvas",
+        initial_drawing=initial_drawing,
         update_streamlit=True
     )
 
-    # Sync if canvas changed
-    if canvas_result.json_data and canvas_result.json_data != st.session_state.last_canvas_data:
-        upload_canvas_data(st.session_state.room_code, json.dumps(canvas_result.json_data))
-        st.session_state.last_canvas_data = canvas_result.json_data
+    # 🔼 Upload if changed
+    if canvas_result.json_data:
+        new_data_json = json.dumps(canvas_result.json_data)
+        if new_data_json != st.session_state.last_synced_data:
+            upload_canvas_data(st.session_state.room_code, new_data_json)
+            st.session_state.last_synced_data = new_data_json
 
     if st.button("❌ Exit Game"):
-        for key in ['in_game', 'room_code', 'last_canvas_data']:
-            st.session_state[key] = False if key == 'in_game' else ''
+        st.session_state.in_game = False
+        st.session_state.room_code = ''
         st.rerun()
 
-# ------------------ Routing ------------------ #
+# ----------------------- Routing ------------------------- #
 menu = st.sidebar.radio("Navigate", ["Login", "Register", "DrawRoom"])
+
 if not st.session_state.logged_in:
     if menu == "Login":
         show_login()
